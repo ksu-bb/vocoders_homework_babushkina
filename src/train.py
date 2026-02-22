@@ -15,6 +15,8 @@ from src.datasets.collate import vocoder_collate_fn
 from src.models.hifigan import get_generator, get_discriminators
 from src.models.losses import HiFiGANLoss
 
+os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
+
 def save_checkpoint(generator, mpd, msd, optimizer_g, optimizer_d, epoch, path):
     torch.save({
         'generator': generator.state_dict(),
@@ -136,7 +138,7 @@ def train(config):
 
             global_step += 1
             
-            if global_step % 100 == 0:
+            if global_step % 50 == 0:
                 torch.cuda.empty_cache()
             
             if global_step % config['training']['log_every'] == 0:
