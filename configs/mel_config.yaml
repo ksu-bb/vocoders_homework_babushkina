@@ -35,3 +35,7 @@ generator:
 loss:
   lambda_fm: 2.0
   lambda_mel: 45.0
+
+checkpoint_path: /content/checkpoints/g_final.pth
+audio_dir: /content/test_mos
+output_dir: /content/synthesized
