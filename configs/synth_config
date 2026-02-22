@@ -1,0 +1,6 @@
+defaults:
+  - mel_config
+
+checkpoint_path: ./checkpoints/g_final.pth
+audio_dir: ./test_mos
+output_dir: ./synthesized
