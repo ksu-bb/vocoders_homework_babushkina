@@ -72,8 +72,6 @@ def train(config):
         pin_memory=True
     )
     
-
-
     generator = get_generator(config['generator']).to(device)
     mpd, msd = get_discriminators()
     mpd = mpd.to(device)
@@ -93,12 +91,9 @@ def train(config):
         weight_decay=config['training']['weight_decay']
     )
     
-
     scheduler_g = ExponentialLR(optimizer_g, gamma=0.999)
     scheduler_d = ExponentialLR(optimizer_d, gamma=0.999)
-
-
-
+    
     loss_fn = HiFiGANLoss(config, device=device)
     checkpoint_dir = Path(config['training']['checkpoint_path'])
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -106,47 +101,60 @@ def train(config):
     global_step = 0
 
 
+    accumulation_steps = config['training'].get('gradient_accumulation_steps', 1)
+    print(f'Gradient accumulation steps: {accumulation_steps}')
     
     for epoch in range(start_epoch, config['training']['epochs']):
         generator.train()
         mpd.train()
         msd.train()
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['training']['epochs']}")
         
-        pbar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{config['training']['epochs']}')
-        
-        for batch in pbar:
+        for batch_idx, batch in enumerate(pbar):
             mel = batch['mel'].to(device)
-            audio = batch['audio'].unsqueeze(1).to(device)  
+            audio = batch['audio'].unsqueeze(1).to(device)
+
             optimizer_g.zero_grad()
             audio_hat = generator(mel)
-
+            
             y_d_rs, y_d_gs, fmap_rs, fmap_gs = mpd(audio, audio_hat)
             y_ds_rs, y_ds_gs, fmap_rs_s, fmap_gs_s = msd(audio, audio_hat)
             y_d_rs_combined = y_d_rs + y_ds_rs
             y_d_gs_combined = y_d_gs + y_ds_gs
             fmap_rs_combined = fmap_rs + fmap_rs_s
             fmap_gs_combined = fmap_gs + fmap_gs_s
-
+            
             losses = loss_fn(
                 audio, audio_hat,
                 fmap_rs_combined, fmap_gs_combined,
                 y_d_rs_combined, y_d_gs_combined
             )
             
-            losses['loss_gen'].backward()
-            optimizer_g.step()
+            loss_gen_scaled = losses['loss_gen'] / accumulation_steps
+            loss_gen_scaled.backward()
+
+            if (batch_idx + 1) % accumulation_steps == 0:
+                optimizer_g.step()
+
             optimizer_d.zero_grad()
-            audio_hat = audio_hat.detach()
-            y_d_rs, y_d_gs, _, _ = mpd(audio, audio_hat)
-            y_ds_rs, y_ds_gs, _, _ = msd(audio, audio_hat)
+            audio_hat_det = audio_hat.detach()  
+            
+            y_d_rs, y_d_gs, _, _ = mpd(audio, audio_hat_det)
+            y_ds_rs, y_ds_gs, _, _ = msd(audio, audio_hat_det)
             y_d_rs_combined = y_d_rs + y_ds_rs
             y_d_gs_combined = y_d_gs + y_ds_gs
+            
             loss_disc = loss_fn.discriminator_loss(y_d_rs_combined, y_d_gs_combined)
-            loss_disc.backward()
-            optimizer_d.step()
-
+            loss_disc_scaled = loss_disc / accumulation_steps
+            loss_disc_scaled.backward()
+            
+            if (batch_idx + 1) % accumulation_steps == 0:
+                optimizer_d.step()
+            
             global_step += 1
 
+            if global_step % 100 == 0:
+                torch.cuda.empty_cache()
             
             if global_step % config['training']['log_every'] == 0:
                 wandb.log({
@@ -159,15 +167,17 @@ def train(config):
                     'global_step': global_step
                 })
                 
+
                 pbar.set_postfix({
-                    'loss_g': f'{losses['loss_gen'].item():.4f}',
-                    'loss_d': f'{loss_disc.item():.4f}'
+                    'loss_g': f"{losses['loss_gen'].item():.4f}",
+                    'loss_d': f"{loss_disc.item():.4f}"
                 })
         
-
         scheduler_g.step()
         scheduler_d.step()
 
+        torch.cuda.empty_cache()
+        
         if (epoch + 1) % 10 == 0:
             generator.eval()
             val_loss = 0
@@ -190,13 +200,15 @@ def train(config):
             
             val_loss /= len(val_loader)
             wandb.log({'val/loss_gen': val_loss, 'epoch': epoch + 1})
-
+            
             wandb.log({
                 'audio/real': wandb.Audio(audio[0].cpu().numpy(), sample_rate=config['mel_spec']['sr']),
                 'audio/generated': wandb.Audio(audio_hat[0].cpu().numpy(), sample_rate=config['mel_spec']['sr']),
                 'epoch': epoch + 1
             })
-
+            
+            generator.train()
+        
         if (epoch + 1) % 10 == 0:
             checkpoint_path = checkpoint_dir / f'g_{epoch+1:06d}.pth'
             save_checkpoint(
@@ -216,7 +228,7 @@ def train(config):
     )
     
     wandb.finish()
-    print('Training completed!')
+    print('Done...')
 
 
 if __name__ == '__main__':
