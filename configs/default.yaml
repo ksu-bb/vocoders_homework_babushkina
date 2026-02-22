@@ -1,0 +1,6 @@
+defaults:
+  - mel_config
+
+experiment_name: ruslan_vocoder_baseline
+seed: 42
+device: cuda

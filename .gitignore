@@ -1,0 +1,14 @@
+data/
+*.wav
+
+checkpoints/
+*.pth
+*.pt
+*.onnx
+
+*.log
+wandb/
+
+__pycache__/
+*.pyc
+venv/
