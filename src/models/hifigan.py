@@ -6,33 +6,31 @@ from torch.nn.utils import weight_norm, spectral_norm
 from typing import List, Tuple
 
 
-
 def init_weights(m, mean=0.0, std=0.01):
     if isinstance(m, (nn.Conv1d, nn.ConvTranspose1d)):
         m.weight.data.normal_(mean, std)
+
 
 def get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
 
 
-# GENERATOR ----------------------------------------------
-
+# GENERATOR --------------------------------------------------------------
 class ResBlock(nn.Module):
     def __init__(self, channels: int, kernel_size: int = 3, dilation: List[int] = [1, 3, 5]):
         super().__init__()
         self.convs1 = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, 
-                              dilation=d, padding=get_padding(kernel_size, d)))
+            weight_norm(Conv1d(channels, channels, kernel_size, 1,
+                               dilation=d, padding=get_padding(kernel_size, d)))
             for d in dilation
         ])
         self.convs2 = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, 
-                              dilation=1, padding=get_padding(kernel_size, 1)))
+            weight_norm(Conv1d(channels, channels, kernel_size, 1,
+                               dilation=1, padding=get_padding(kernel_size, 1)))
             for _ in dilation
         ])
         self.convs1.apply(init_weights)
         self.convs2.apply(init_weights)
-
 
     def forward(self, x):
         for c1, c2 in zip(self.convs1, self.convs2):
@@ -42,7 +40,6 @@ class ResBlock(nn.Module):
             xt = c2(xt)
             x = xt + x
         return x
-
 
     def remove_weight_norm(self):
         for l in self.convs1:
@@ -58,10 +55,8 @@ class MRF(nn.Module):
             ResBlock(channels, k, d) for k, d in zip(kernel_sizes, dilations)
         ])
 
-
     def forward(self, x):
         return sum([rb(x) for rb in self.resblocks]) / len(self.resblocks)
-
 
     def remove_weight_norm(self):
         for rb in self.resblocks:
@@ -78,7 +73,7 @@ class Generator(nn.Module):
         self.conv_pre = weight_norm(
             Conv1d(config['n_mels'], config['upsample_initial_channel'], 7, 1, padding=3)
         )
-        
+
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(config['upsample_rates'], config['upsample_kernel_sizes'])):
             self.ups.append(weight_norm(
@@ -88,7 +83,7 @@ class Generator(nn.Module):
                     k, u, padding=(k-u)//2
                 )
             ))
-        
+
         self.mrfs = nn.ModuleList()
         for i in range(len(self.ups)):
             self.mrfs.append(MRF(
@@ -96,27 +91,27 @@ class Generator(nn.Module):
                 config['resblock_kernel_sizes'],
                 config['resblock_dilation_sizes']
             ))
-        
+
         self.conv_post = weight_norm(Conv1d(
-            config['upsample_initial_channel'] // (2**(self.num_upsamples)), 
+            config['upsample_initial_channel'] // (2**(self.num_upsamples)),
             1, 7, 1, padding=3
         ))
-        
+
         self.ups.apply(init_weights)
         self.conv_post.apply(init_weights)
 
     def forward(self, x):
         x = self.conv_pre(x)
-        
+
         for i in range(self.num_upsamples):
             x = F.leaky_relu(x, 0.1)
             x = self.ups[i](x)
             x = self.mrfs[i](x)
-        
+
         x = F.leaky_relu(x, 0.1)
         x = self.conv_post(x)
-        x = torch.tanh(x)  
-        
+        x = torch.tanh(x)
+
         return x
 
     def remove_weight_norm(self):
@@ -128,15 +123,13 @@ class Generator(nn.Module):
         weight_norm.remove(self.conv_post)
 
 
-# DISCRIMINATOR-------------------------------------------------------------------
-
+# DISCRIMINATOR ----------------------------------------------------------
 class DiscriminatorP(nn.Module):
     def __init__(self, period: int, kernel_size: int = 5, stride: int = 3):
         super().__init__()
         self.period = period
-        
         norm_f = weight_norm
-        
+
         self.convs = nn.ModuleList([
             norm_f(Conv2d(1, 32, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
             norm_f(Conv2d(32, 128, (kernel_size, 1), (stride, 1), padding=(get_padding(kernel_size, 1), 0))),
@@ -154,20 +147,19 @@ class DiscriminatorP(nn.Module):
             n_pad = self.period - (t % self.period)
             x = F.pad(x, (0, n_pad), 'reflect')
             t = t + n_pad
-        
+
         x = x.view(b, c, t // self.period, self.period)
-        
+
         for l in self.convs:
             x = l(x)
             x = F.leaky_relu(x, 0.1)
             fmap.append(x)
-        
+
         x = self.conv_post(x)
         fmap.append(x)
         x = torch.flatten(x, 1, -1)
-        
-        return fmap, x
 
+        return fmap, x
 
     def remove_weight_norm(self):
         for l in self.convs:
@@ -179,7 +171,7 @@ class DiscriminatorS(nn.Module):
     def __init__(self, use_spectral_norm: bool = False):
         super().__init__()
         norm_f = spectral_norm if use_spectral_norm else weight_norm
-        
+
         self.convs = nn.ModuleList([
             norm_f(Conv1d(1, 16, 15, 1, padding=7)),
             norm_f(Conv1d(16, 64, 41, 4, groups=4, padding=20)),
@@ -192,18 +184,17 @@ class DiscriminatorS(nn.Module):
 
     def forward(self, x):
         fmap = []
-        
+
         for l in self.convs:
             x = l(x)
             x = F.leaky_relu(x, 0.1)
             fmap.append(x)
-        
+
         x = self.conv_post(x)
         fmap.append(x)
         x = torch.flatten(x, 1, -1)
-        
-        return fmap, x
 
+        return fmap, x
 
     def remove_weight_norm(self):
         for l in self.convs:
@@ -218,25 +209,22 @@ class MultiPeriodDiscriminator(nn.Module):
             DiscriminatorP(period) for period in [2, 3, 5, 7, 11]
         ])
 
-
     def forward(self, y, y_hat):
         y_d_rs = []
         fmap_rs = []
-
         y_d_gs = []
         fmap_gs = []
-        
+
         for d in self.discriminators:
             y_d_r, fmap_r = d(y)
             y_d_g, fmap_g = d(y_hat)
-            
+
             y_d_rs.append(y_d_r)
             y_d_gs.append(y_d_g)
             fmap_rs.append(fmap_r)
             fmap_gs.append(fmap_g)
-        
-        return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
+        return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
     def remove_weight_norm(self):
         for d in self.discriminators:
@@ -247,7 +235,7 @@ class MultiScaleDiscriminator(nn.Module):
     def __init__(self):
         super().__init__()
         self.discriminators = nn.ModuleList([
-            DiscriminatorS(use_spectral_norm=True),  
+            DiscriminatorS(use_spectral_norm=True),
             DiscriminatorS(),
             DiscriminatorS(),
         ])
@@ -256,34 +244,30 @@ class MultiScaleDiscriminator(nn.Module):
             nn.AvgPool1d(4, 2, padding=2),
         ])
 
-
     def forward(self, y, y_hat):
         y_d_rs = []
         fmap_rs = []
-
         y_d_gs = []
         fmap_gs = []
-        
+
         for i, d in enumerate(self.discriminators):
             if i != 0:
                 y = self.meanpools[i-1](y)
                 y_hat = self.meanpools[i-1](y_hat)
-            
+
             y_d_r, fmap_r = d(y)
             y_d_g, fmap_g = d(y_hat)
-            
+
             y_d_rs.append(y_d_r)
             y_d_gs.append(y_d_g)
             fmap_rs.append(fmap_r)
             fmap_gs.append(fmap_g)
-        
+
         return y_d_rs, y_d_gs, fmap_rs, fmap_gs
 
     def remove_weight_norm(self):
         for d in self.discriminators:
             d.remove_weight_norm()
-
-
 
 
 def get_generator(config: dict) -> Generator:
