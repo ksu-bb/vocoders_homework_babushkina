@@ -12,8 +12,8 @@ mel_spec:
 data:
   audio_path: ./data/RUSLAN
   filelist_path: ./data/filelists
-  batch_size: 16
-  num_workers: 4
+  batch_size: 4
+  num_workers: 2
 
 training:
   epochs: 100
@@ -22,6 +22,7 @@ training:
   checkpoint_path: ./checkpoints
   betas: [0.8, 0.99]
   weight_decay: 0.01
+  gradient_accumulation_steps: 4 
 
 generator:
   n_mels: 80
