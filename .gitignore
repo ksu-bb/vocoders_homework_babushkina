@@ -5,6 +5,7 @@ checkpoints/
 *.pth
 *.pt
 *.onnx
+!checkpoints/.gitkeep
 
 *.log
 wandb/
@@ -12,3 +13,4 @@ wandb/
 __pycache__/
 *.pyc
 venv/
+
